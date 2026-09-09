@@ -1,0 +1,38 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime data and logs
+data/*
+!data/.gitkeep
+*.log
+*.db
+*.db-*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+.tox/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

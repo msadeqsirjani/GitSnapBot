@@ -1,0 +1,20 @@
+[project]
+name = "gitsnapbot"
+version = "1.0.0"
+description = "Telegram bot that reports GitHub profile activity automatically."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+gitsnapbot = "gitsnapbot.__main__:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
