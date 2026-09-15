@@ -45,7 +45,7 @@ def test_follow_and_star_messages_include_links() -> None:
     star = format_star("octocat", "me/repo", 4)
     assert "me/repo" in star.text
     unstar = format_unstar("octocat", "me/repo", 3)
-    assert "Unstarred" in unstar.text
+    assert "Star removed" in unstar.text
 
 
 def test_watch_event() -> None:
@@ -143,7 +143,7 @@ def test_notification_mention() -> None:
         }
     )
     assert alert is not None
-    assert "mentioned you" in (alert.fallback or alert.text)
+    assert "You were mentioned." in (alert.fallback or alert.text)
     assert alert.url == "https://github.com/foo/bar/issues/1"
 
 
@@ -162,8 +162,8 @@ def test_compact_alerts_groups_follows() -> None:
 def test_signature_appends_gitsnapbot_mark() -> None:
     alert = format_follow("octocat", 3)
     signed_alert = signed(alert, "GitSnapBot")
-    assert "✦ GitSnapBot" in signed_alert.text
-    assert signed_alert.fallback and "✦ GitSnapBot" in signed_alert.fallback
+    assert "<footer>GitSnapBot</footer>" in signed_alert.text
+    assert signed_alert.fallback and signed_alert.fallback.endswith("<i>GitSnapBot</i>")
 
 
 def test_next_link_parser() -> None:

@@ -26,7 +26,7 @@ def test_deleted_and_unfork_cards() -> None:
     assert fork.kind == "fork"
     unfork = format_unfork("octocat", "me/repo", 1)
     assert unfork.kind == "unfork"
-    assert "Fork deleted" in unfork.text
+    assert "Fork removed" in unfork.text
 
 
 def test_pending_commit_waits_until_apply(tmp_path: Path) -> None:

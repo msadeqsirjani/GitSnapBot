@@ -78,12 +78,39 @@ def test_weekly_digest_is_one_grouped_report() -> None:
         max_lines=20,
     )
     assert alert.kind == "digest"
-    assert "Weekly GitSnapBot" in alert.text
+    assert "GitHub activity report" in alert.text
     assert "New followers" in alert.text
     assert "Stars" in alert.text
-    assert "✦ GitSnapBot" in alert.text
-    assert "Top repos" in alert.text
+    assert "GitSnapBot" in alert.text
+    assert "Most starred repositories" in alert.text
     assert "me/repo" in alert.text
+    assert "opengraph.githubassets.com/gitsnapbot/me/repo" in alert.text
+    assert alert.image_url == "https://opengraph.githubassets.com/gitsnapbot/me/repo"
+
+    pictured = format_weekly_digest(
+        items,
+        period_start=datetime(2026, 9, 7, 9, 0, tzinfo=TZ),
+        period_end=datetime(2026, 9, 14, 9, 0, tzinfo=TZ),
+        follower_count=12,
+        signature="GitSnapBot",
+        max_lines=20,
+        username="octocat",
+    )
+    assert '<img src="https://github.com/octocat.png?size=460"/>' in pictured.text
+    assert "opengraph.githubassets.com/gitsnapbot/me/repo" in pictured.text
+    assert "<tg-collage>" in pictured.text
+    assert pictured.image_url == "https://github.com/octocat.png?size=460"
+    preview = format_weekly_digest(
+        items,
+        period_start=datetime(2026, 9, 7, 9, 0, tzinfo=TZ),
+        period_end=datetime(2026, 9, 14, 9, 0, tzinfo=TZ),
+        follower_count=12,
+        signature="GitSnapBot",
+        max_lines=20,
+        preview=True,
+    )
+    assert preview.kind == "preview"
+    assert "Queue is unchanged" in preview.text
     assert format_period(
         datetime(2026, 9, 7, tzinfo=TZ), datetime(2026, 9, 14, tzinfo=TZ)
     )
@@ -101,6 +128,6 @@ def test_week_over_week_and_quiet_week() -> None:
         signature="GitSnapBot",
         max_lines=20,
     )
-    assert "quiet week" in quiet.text
+    assert "No activity this period" in quiet.text
     assert "40 → <b>43</b> (+3)" in quiet.text
     assert "183 → <b>190</b> (+7)" in quiet.text

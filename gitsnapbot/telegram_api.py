@@ -7,6 +7,7 @@ import httpx
 
 from gitsnapbot.config import Config
 from gitsnapbot.logsetup import short_url
+from gitsnapbot.messages import escape
 
 log = logging.getLogger("gitsnapbot.telegram")
 
@@ -65,6 +66,33 @@ class TelegramClient:
             },
         )
 
+    async def unpin_chat_message(
+        self, chat_id: str | int, message_id: int | None = None
+    ) -> None:
+        payload: dict[str, Any] = {"chat_id": chat_id}
+        if message_id is not None:
+            payload["message_id"] = message_id
+        await self._call("unpinChatMessage", payload)
+
+    async def unpin_all_chat_messages(self, chat_id: str | int) -> None:
+        await self._call("unpinAllChatMessages", {"chat_id": chat_id})
+
+    async def clear_pinned_messages(self, chat_id: str | int) -> None:
+        try:
+            await self.unpin_all_chat_messages(chat_id)
+            return
+        except TelegramError as exc:
+            log.info("unpinAllChatMessages unavailable (%s) — unpinning one by one", exc)
+        for _ in range(100):
+            try:
+                await self.unpin_chat_message(chat_id)
+            except TelegramError:
+                break
+
+    async def replace_pinned_message(self, chat_id: str | int, message_id: int) -> None:
+        await self.clear_pinned_messages(chat_id)
+        await self.pin_chat_message(chat_id, message_id)
+
     async def send_message(
         self,
         chat_id: str | int,
@@ -73,6 +101,7 @@ class TelegramClient:
         fallback: str | None = None,
         reply_markup: dict[str, Any] | None = None,
         rich: bool = True,
+        image_url: str | None = None,
     ) -> Any:
         markup = reply_markup
         if rich:
@@ -88,6 +117,8 @@ class TelegramClient:
                 log.info("Rich messages unavailable (%s) — sending HTML fallback", exc)
 
         plain = fallback or text
+        if image_url:
+            plain = f'<a href="{escape(image_url)}">&#8205;</a>\n{plain}'
         limit = self.config.telegram_message_limit
         if len(plain) > limit:
             plain = plain[: max(limit - 10, 1)] + "…"
@@ -95,7 +126,7 @@ class TelegramClient:
             "chat_id": chat_id,
             "text": plain,
             "parse_mode": "HTML",
-            "disable_web_page_preview": True,
+            "disable_web_page_preview": not bool(image_url),
         }
         if markup:
             payload["reply_markup"] = markup

@@ -4,7 +4,14 @@ from collections import Counter
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from gitsnapbot.messages import Alert, escape, repo_link
+from gitsnapbot.messages import (
+    Alert,
+    escape,
+    github_avatar_url,
+    github_repo_og_url,
+    repo_link,
+    rich_figure,
+)
 
 WEEKDAYS = {
     "monday": 0,
@@ -18,32 +25,32 @@ WEEKDAYS = {
 
 SECTIONS = [
     ("follow", "➕", "New followers"),
-    ("unfollow", "➖", "Unfollowed"),
-    ("deleted", "👻", "Accounts gone"),
+    ("unfollow", "➖", "Followers removed"),
+    ("deleted", "⚠️", "Deleted accounts"),
     ("star", "⭐", "Stars"),
-    ("unstar", "💔", "Unstars"),
+    ("unstar", "⭐", "Stars removed"),
     ("fork", "🍴", "Forks"),
-    ("unfork", "🗑", "Forks removed"),
-    ("watch", "👀", "Watching"),
-    ("unwatch", "🙈", "Stopped watching"),
+    ("unfork", "🍴", "Forks removed"),
+    ("watch", "👁", "Watchers"),
+    ("unwatch", "👁", "Watchers removed"),
     ("issue", "🐛", "Issues"),
     ("comment", "💬", "Comments"),
     ("pr", "🔀", "Pull requests"),
-    ("pr_comment", "💬", "PR comments"),
+    ("pr_comment", "💬", "Pull request comments"),
     ("review", "🔎", "Reviews"),
     ("review_comment", "💬", "Review comments"),
     ("push", "📦", "Pushes"),
     ("release", "🏷", "Releases"),
-    ("member", "🤝", "Collaborators"),
-    ("notification", "📣", "Mentions"),
-    ("traffic_views", "👁", "Repo views"),
-    ("traffic_clones", "📥", "Clones"),
-    ("create", "✨", "Created"),
-    ("delete", "🗑", "Deleted refs"),
-    ("public", "🌍", "Made public"),
+    ("member", "👤", "Collaborators"),
+    ("notification", "🔔", "Mentions"),
+    ("traffic_views", "👁", "Repository views"),
+    ("traffic_clones", "📥", "Repository clones"),
+    ("create", "＋", "Created"),
+    ("delete", "－", "Deleted"),
+    ("public", "🌐", "Made public"),
     ("wiki", "📝", "Wiki"),
-    ("sponsor", "💖", "Sponsors"),
-    ("discussion", "💭", "Discussions"),
+    ("sponsor", "♥", "Sponsors"),
+    ("discussion", "💬", "Discussions"),
     ("discussion_comment", "💬", "Discussion comments"),
     ("commit_comment", "💬", "Commit comments"),
 ]
@@ -170,6 +177,8 @@ def format_weekly_digest(
     prev_followers: int | None = None,
     prev_stars: int | None = None,
     top_repo_limit: int = 5,
+    username: str | None = None,
+    preview: bool = False,
 ) -> Alert:
     period = format_period(period_start, period_end)
     counts: dict[str, int] = {}
@@ -187,7 +196,7 @@ def format_weekly_digest(
             summary_rows.append(f"<tr><th>{icon} {escape(title)}</th><td>{n}</td></tr>")
     other = sum(n for kind, n in counts.items() if kind not in known)
     if other:
-        summary_rows.append(f"<tr><th>📌 Other</th><td>{other}</td></tr>")
+        summary_rows.append(f"<tr><th>Other</th><td>{other}</td></tr>")
 
     follow_html, follow_plain = snapshot_line("Followers", prev_followers, follower_count)
     star_html, star_plain = snapshot_line("Stars", prev_stars, star_count)
@@ -195,39 +204,58 @@ def format_weekly_digest(
     headline = (
         f"{len(items)} update{'s' if len(items) != 1 else ''}"
         if items
-        else "quiet week"
+        else "No activity this period"
     )
-    rich: list[str] = [
-        "<h1>📬 Weekly GitSnapBot</h1>",
-        f"<p><b>{escape(period)}</b> · {escape(headline)}</p>",
-        f"<table bordered striped compact>{follow_html}{star_html}</table>",
-    ]
+    image_url: str | None = github_avatar_url(username) if username else None
+    title = "Activity report (preview)" if preview else "GitHub activity report"
+    rich: list[str] = []
+    if username:
+        rich.append(
+            rich_figure(
+                github_avatar_url(username),
+                f"{escape(username)} · {escape(title)}",
+            )
+        )
+    rich.extend(
+        [
+            f"<h1>{escape(title)}</h1>",
+            f"<p><b>{escape(period)}</b> · {escape(headline)}</p>",
+            f"<table bordered striped compact>{follow_html}{star_html}</table>",
+        ]
+    )
     plain: list[str] = [
-        "📬 <b>Weekly GitSnapBot</b>",
+        f"<b>{escape(title)}</b>",
         f"{escape(period)} · {headline}",
         follow_plain,
         star_plain,
     ]
+    if preview:
+        note = "Queue is unchanged. The scheduled report will still be delivered."
+        rich.append(f"<p><i>{note}</i></p>")
+        plain.append(note)
     if not items:
-        rich.append("<p><i>No follows, stars, issues, or other activity this week.</i></p>")
-        plain.append("No follows, stars, issues, or other activity this week.")
+        rich.append("<p><i>No GitHub activity was recorded during this period.</i></p>")
+        plain.append("No GitHub activity was recorded during this period.")
     if summary_rows:
-        rich.append(f"<h2>This week</h2><table bordered striped compact>{''.join(summary_rows)}</table>")
+        rich.append(f"<h2>Summary</h2><table bordered striped compact>{''.join(summary_rows)}</table>")
 
     top = top_starred_repos(items, top_repo_limit)
     if top:
         rows = "".join(
             f"<tr><td>{repo_link(name)}</td><td>+{n}</td></tr>" for name, n in top
         )
-        rich.append(f"<h2>⭐ Top repos</h2><table bordered striped compact>{rows}</table>")
-        plain.append("\n⭐ <b>Top repos</b>")
+        rich.append(rich_figure(github_repo_og_url(top[0][0]), escape(top[0][0])))
+        rich.append(f"<h2>Most starred repositories</h2><table bordered striped compact>{rows}</table>")
+        plain.append("\n<b>Most starred repositories</b>")
         plain.extend(f"• {name}  +{n}" for name, n in top)
+        if image_url is None:
+            image_url = github_repo_og_url(top[0][0])
 
     used = {key for key, _, _ in SECTIONS}
     ordered_kinds = [(k, i, t) for k, i, t in SECTIONS if k in grouped]
     extras = sorted(k for k in grouped if k not in used)
     for kind in extras:
-        ordered_kinds.append((kind, "📌", kind.replace("_", " ").title()))
+        ordered_kinds.append((kind, "•", kind.replace("_", " ").title()))
 
     for kind, icon, title in ordered_kinds:
         rows = grouped[kind]
@@ -240,19 +268,33 @@ def format_weekly_digest(
             bullets.append(f"<li>{snippet}</li>")
             plain_lines.append(f"• {snippet}")
         if extra > 0:
-            bullets.append(f"<li><i>…and {extra} more</i></li>")
-            plain_lines.append(f"…and {extra} more")
+            bullets.append(f"<li><i>…and {extra} additional items</i></li>")
+            plain_lines.append(f"…and {extra} additional items")
         rich.append(f"<h2>{icon} {escape(title)} ({len(rows)})</h2><ul>{''.join(bullets)}</ul>")
         plain.append(f"\n{icon} <b>{escape(title)}</b> ({len(rows)})")
         plain.extend(plain_lines)
 
-    footer = f"✦ {escape(signature)}" if signature else ""
+    actors: list[str] = []
+    for item in items:
+        actor = item.get("actor")
+        if actor and actor not in actors:
+            actors.append(actor)
+    if len(actors) >= 2:
+        collage = "".join(
+            f'<img src="{escape(github_avatar_url(login))}"/>' for login in actors[:8]
+        )
+        rich.append(
+            f"<tg-collage>{collage}<figcaption>Accounts in this report</figcaption></tg-collage>"
+        )
+
+    footer = escape(signature) if signature else ""
     if footer:
         rich.append(f"<footer>{footer}</footer>")
         plain.append(f"\n<i>{footer}</i>")
 
     return Alert(
-        kind="digest",
+        kind="preview" if preview else "digest",
         text="".join(rich),
         fallback="\n".join(plain),
+        image_url=image_url,
     )
