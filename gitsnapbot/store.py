@@ -324,3 +324,36 @@ class Store:
 
     def set_last_digest_at(self, timestamp: float) -> None:
         self.set_meta("last_digest_at", str(timestamp))
+
+    def last_brief_at(self) -> float | None:
+        raw = self.get_meta("last_brief_at")
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
+    def set_last_brief_at(self, timestamp: float) -> None:
+        self.set_meta("last_brief_at", str(timestamp))
+
+    def save_last_report(
+        self,
+        text: str,
+        fallback: str | None,
+        image_url: str | None = None,
+    ) -> None:
+        self.set_meta("last_report_text", text)
+        self.set_meta("last_report_fallback", fallback or "")
+        self.set_meta("last_report_image_url", image_url or "")
+        self.set_meta("last_report_at", str(time.time()))
+
+    def last_report(self) -> dict[str, str | None] | None:
+        text = self.get_meta("last_report_text")
+        if not text:
+            return None
+        return {
+            "text": text,
+            "fallback": self.get_meta("last_report_fallback") or None,
+            "image_url": self.get_meta("last_report_image_url") or None,
+        }
