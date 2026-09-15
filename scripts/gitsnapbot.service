@@ -1,0 +1,15 @@
+[Unit]
+Description=GitSnapBot weekly GitHub activity reports
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/gitsnapbot
+ExecStart=/opt/gitsnapbot/.venv/bin/python -m gitsnapbot
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -24,6 +24,8 @@ cat > "$DEST" <<EOF
   <string>${ROOT}</string>
   <key>ProgramArguments</key>
   <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-i</string>
     <string>${PYTHON}</string>
     <string>-m</string>
     <string>gitsnapbot</string>
