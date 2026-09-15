@@ -12,6 +12,17 @@ import httpx
 
 from gitsnapbot.config import Config
 from gitsnapbot.digest import digest_is_due, format_weekly_digest, next_digest_slot
+from gitsnapbot.features.archive import load_report, save_report
+from gitsnapbot.features.brief import brief_is_due, format_daily_brief
+from gitsnapbot.features.chatlock import bound_chat_id, is_allowed, should_bind
+from gitsnapbot.features.preview import NON_REPORT_KINDS, plan_delivery
+from gitsnapbot.features.schedule import (
+    apply_schedule,
+    describe_schedule,
+    load_schedule,
+    parse_schedule,
+)
+from gitsnapbot.features.tokenwatch import is_unauthorized, token_alert
 from gitsnapbot.github_api import GitHubClient, GitHubError
 from gitsnapbot.logsetup import print_banner, startup_banner
 from gitsnapbot.messages import Alert, format_status, format_welcome
@@ -49,7 +60,7 @@ class BotApp:
             self.store.set_chat_id(config.telegram_chat_id)
 
     def chat_id(self) -> str | None:
-        return self.store.chat_id() or self.config.telegram_chat_id
+        return bound_chat_id(self.config, self.store)
 
     async def start(self) -> None:
         self.config.data_dir.mkdir(parents=True, exist_ok=True)
@@ -144,13 +155,7 @@ class BotApp:
             markup = status_inline(self.store.paused())
         else:
             markup = activity_inline(alert)
-        if self.config.bot_signature and alert.kind not in {
-            "welcome",
-            "help",
-            "status",
-            "system",
-            "digest",
-        }:
+        if self.config.bot_signature and alert.kind not in NON_REPORT_KINDS | {"digest"}:
             from gitsnapbot.messages import signed
 
             alert = signed(alert, self.config.bot_signature)
@@ -165,21 +170,23 @@ class BotApp:
             alert.text,
             fallback=alert.fallback,
             reply_markup=markup,
+            image_url=alert.image_url,
         )
-        if alert.kind not in {"welcome", "status", "help", "system"}:
+        if alert.kind not in NON_REPORT_KINDS:
             self.store.increment_sent()
         return result
 
     def _digest_tz(self) -> ZoneInfo:
-        return ZoneInfo(self.config.digest_timezone)
+        return load_schedule(self.store, self.config)["tz"]
 
     def _digest_kwargs(self) -> dict[str, Any]:
+        sched = load_schedule(self.store, self.config)
         return {
-            "period": self.config.digest_period,
-            "weekday": self.config.digest_weekday,
-            "hour": self.config.digest_hour,
-            "minute": self.config.digest_minute,
-            "tz": self._digest_tz(),
+            "period": sched["period"],
+            "weekday": sched["weekday"],
+            "hour": sched["hour"],
+            "minute": sched["minute"],
+            "tz": sched["tz"],
         }
 
     def _next_digest_label(self) -> str:
@@ -187,7 +194,7 @@ class BotApp:
         return nxt.strftime("%a %d %b %Y %H:%M %Z")
 
     def _queue_alerts(self, alerts: list[Alert]) -> None:
-        skip = {"welcome", "status", "help", "system", "digest"}
+        skip = set(NON_REPORT_KINDS) | {"digest"}
         rows = [
             {
                 "kind": alert.kind,
@@ -220,34 +227,37 @@ class BotApp:
         self,
         *,
         force: bool = False,
+        preview: bool = False,
         chat_id: str | int | None = None,
     ) -> None:
         assert self.telegram is not None and self.tracker is not None
         now = datetime.now(self._digest_tz())
         last_raw = self.store.last_digest_at()
         last_sent = datetime.fromtimestamp(last_raw, tz=self._digest_tz()) if last_raw else None
-        if not force and not digest_is_due(now, last_sent, **self._digest_kwargs()):
+        if not force and not preview and not digest_is_due(now, last_sent, **self._digest_kwargs()):
             log.debug("Weekly report not due  next=%s", self._next_digest_label())
             return
+        plan = plan_delivery(preview=preview, digest_pin=self.config.digest_pin)
         log.info(
-            "Preparing weekly report  force=%s  queued=%s  period=%s",
-            force,
+            "Preparing weekly report  preview=%s  queued=%s  period=%s",
+            plan.preview,
             self.store.digest_count(),
-            self.config.digest_period,
+            load_schedule(self.store, self.config)["period"],
         )
         items = self.store.list_digest_items()
         if not items:
-            if force and not self.config.digest_send_empty:
+            if plan.preview or (force and not self.config.digest_send_empty):
                 await self.telegram.send_message(
                     chat_id or self.chat_id() or "",
-                    "<h2>📬 Weekly report</h2><p>Nothing new is queued yet. I'll keep collecting.</p>",
-                    fallback="📬 Nothing new is queued yet. I'll keep collecting.",
+                    "<h2>Activity report</h2><p>No new activity is queued. Collection is continuing.</p>",
+                    fallback="No new activity is queued. Collection is continuing.",
                     reply_markup=self._keyboard(),
                 )
                 return
-            if not force and not self.config.digest_send_empty:
+            if not self.config.digest_send_empty:
                 log.info("Weekly slot reached with an empty queue — skipping send")
                 self.store.set_last_digest_at(now.timestamp())
+                self.store.set_last_brief_at(now.timestamp())
                 return
         start = last_sent or (now - timedelta(days=7))
         alert = format_weekly_digest(
@@ -261,26 +271,55 @@ class BotApp:
             signature=self.config.bot_signature,
             max_lines=self.config.digest_max_lines,
             top_repo_limit=self.config.digest_top_repos,
+            username=self.tracker.username,
+            preview=plan.preview,
         )
         result = await self.send(alert, chat_id=chat_id, with_nav=True)
-        if self.config.digest_pin and isinstance(result, dict) and result.get("message_id"):
+        if plan.pin and isinstance(result, dict) and result.get("message_id"):
             try:
-                await self.telegram.pin_chat_message(
+                await self.telegram.replace_pinned_message(
                     chat_id or self.chat_id() or "",
                     int(result["message_id"]),
                 )
-                log.info("Pinned the weekly report")
+                log.info("Pinned the weekly report and removed previous pins")
             except TelegramError:
                 log.info("Could not pin the weekly report (the bot may lack permission)")
-        self.store.clear_digest_items()
-        self.store.set_last_digest_at(now.timestamp())
-        self.store.set_meta("last_digest_followers", str(self.tracker.follower_count))
-        self.store.set_meta("last_digest_stars", str(self.tracker.star_total))
+        if plan.save_archive:
+            save_report(self.store, alert)
+        if plan.clear_queue:
+            self.store.clear_digest_items()
+        if plan.update_slot:
+            self.store.set_last_digest_at(now.timestamp())
+            self.store.set_last_brief_at(now.timestamp())
+            self.store.set_meta("last_digest_followers", str(self.tracker.follower_count))
+            self.store.set_meta("last_digest_stars", str(self.tracker.star_total))
         log.info(
-            "Weekly report delivered  items=%s  next=%s",
+            "Weekly report %s  items=%s  next=%s",
+            "previewed" if plan.preview else "delivered",
             len(items),
             self._next_digest_label(),
         )
+
+    async def _flush_daily_brief_if_due(self) -> None:
+        sched = load_schedule(self.store, self.config)
+        if not sched["daily_brief"]:
+            return
+        now = datetime.now(sched["tz"])
+        last_raw = self.store.last_brief_at() or self.store.last_digest_at()
+        last_sent = datetime.fromtimestamp(last_raw, tz=sched["tz"]) if last_raw else None
+        if not brief_is_due(
+            now, last_sent, hour=sched["hour"], minute=sched["minute"], tz=sched["tz"]
+        ):
+            return
+        items = self.store.list_digest_items()
+        alert = format_daily_brief(
+            items,
+            username=self.tracker.username if self.tracker else None,
+            next_report=self._next_digest_label(),
+        )
+        await self.send(alert, with_nav=True)
+        self.store.set_last_brief_at(now.timestamp())
+        log.info("Daily brief delivered  queued=%s", len(items))
 
     async def poll_loop(self) -> None:
         assert self.tracker is not None
@@ -312,9 +351,17 @@ class BotApp:
                 else:
                     self._queue_alerts(alerts)
                     await self._flush_digest_if_due()
+                    await self._flush_daily_brief_if_due()
                 self._consecutive_failures = 0
             except TelegramError:
                 log.exception("Telegram send failed; weekly report was not marked sent")
+            except GitHubError as exc:
+                self._consecutive_failures += 1
+                log.exception("Poll failed (%s consecutive)", self._consecutive_failures)
+                if is_unauthorized(exc):
+                    await self._notify_token_error()
+                else:
+                    await self._maybe_notify_error()
             except Exception:
                 self._consecutive_failures += 1
                 log.exception("Poll failed (%s consecutive)", self._consecutive_failures)
@@ -340,11 +387,21 @@ class BotApp:
             await self.send(
                 Alert(
                     kind="system",
-                    text="⚠️ GitSnapBot could not reach GitHub. I'll keep retrying.",
+                    text="GitSnapBot could not reach GitHub. The service will retry automatically.",
                 )
             )
         except Exception:
             log.exception("Failed to send error notice")
+
+    async def _notify_token_error(self) -> None:
+        now = time.time()
+        if now - self._last_error_notice < self.config.error_notice_seconds:
+            return
+        self._last_error_notice = now
+        try:
+            await self.send(token_alert())
+        except Exception:
+            log.exception("Failed to send token notice")
 
     async def command_loop(self) -> None:
         assert self.telegram is not None
@@ -377,10 +434,21 @@ class BotApp:
         chat_id = chat.get("id")
         if not text or chat_id is None:
             return
+        bound = bound_chat_id(self.config, self.store)
+        if not is_allowed(chat_id, bound):
+            log.info("Ignored command from unauthorized chat %s", chat_id)
+            await self.telegram.send_message(
+                chat_id,
+                "<p>This bot is bound to another chat.</p>",
+                fallback="This bot is bound to another chat.",
+                rich=True,
+            )
+            return
         command = BUTTON_TO_COMMAND.get(text, text.split()[0].split("@", 1)[0]).lower()
         log.info("Command %s  chat=%s", command, chat_id)
         if command == "/start":
-            self.store.set_chat_id(str(chat_id))
+            if should_bind(chat_id, bound):
+                self.store.set_chat_id(str(chat_id))
             await self._send_start(chat_id)
             return
         if command == "/help":
@@ -397,8 +465,8 @@ class BotApp:
             log.info("Collection paused by user")
             await self.telegram.send_message(
                 chat_id,
-                "<h2>⏸ Collection paused</h2><p>The weekly report will wait. Tap Resume to collect again.</p>",
-                fallback="⏸ Collection paused. Tap Resume to collect again.",
+                "<h2>Collection paused</h2><p>GitHub polling is stopped. No new activity will be queued until collection is resumed.</p>",
+                fallback="Collection paused. GitHub polling is stopped until collection is resumed.",
                 reply_markup=self._keyboard(),
             )
             return
@@ -408,8 +476,8 @@ class BotApp:
             log.info("Collection resumed by user")
             await self.telegram.send_message(
                 chat_id,
-                "<h2>▶️ Collecting again</h2><p>GitHub activity is queued for the next weekly report.</p>",
-                fallback="▶️ Collecting again. GitHub activity is queued for the next weekly report.",
+                "<h2>Collection resumed</h2><p>GitHub activity is being queued for the next scheduled report.</p>",
+                fallback="Collection resumed. GitHub activity is being queued for the next scheduled report.",
                 reply_markup=self._keyboard(),
             )
             return
@@ -417,12 +485,20 @@ class BotApp:
             await self._send_status(chat_id)
             return
         if command == "/digest":
-            await self._flush_digest_if_due(force=True, chat_id=chat_id)
+            await self._flush_digest_if_due(force=True, preview=True, chat_id=chat_id)
+            return
+        if command == "/last":
+            await self._send_last(chat_id)
+            return
+        if command == "/when":
+            rest = text.split(maxsplit=1)
+            args = rest[1] if len(rest) > 1 else ""
+            await self._handle_when(chat_id, args)
             return
         await self.telegram.send_message(
             chat_id,
-            "<p>Use the buttons below, or tap <b>Menu</b> next to the input field.</p>",
-            fallback="Use the buttons below, or tap Menu next to the input field.",
+            "<p>Use the keyboard below, or open the command list from <b>Menu</b>.</p>",
+            fallback="Use the keyboard below, or open the command list from Menu.",
             reply_markup=self._keyboard(),
         )
 
@@ -436,7 +512,11 @@ class BotApp:
             await self.telegram.answer_callback(callback_id)
         if chat_id is None:
             return
-        self.store.set_chat_id(str(chat_id))
+        bound = bound_chat_id(self.config, self.store)
+        if not is_allowed(chat_id, bound):
+            return
+        if should_bind(chat_id, bound):
+            self.store.set_chat_id(str(chat_id))
         if data == "pause":
             self.store.set_paused(True)
             await self._send_status(chat_id)
@@ -449,7 +529,10 @@ class BotApp:
             await self._send_status(chat_id)
             return
         if data == "digest":
-            await self._flush_digest_if_due(force=True, chat_id=chat_id)
+            await self._flush_digest_if_due(force=True, preview=True, chat_id=chat_id)
+            return
+        if data == "last":
+            await self._send_last(chat_id)
 
     async def _send_start(self, chat_id: int | str) -> None:
         assert self.telegram is not None and self.tracker is not None
@@ -470,8 +553,8 @@ class BotApp:
             log.exception("Failed to build welcome message")
             await self.telegram.send_message(
                 chat_id,
-                "<h2>🚀 GitSnapBot is online</h2><p>I'll send GitHub activity here automatically.</p>",
-                fallback="🚀 GitSnapBot is online. I'll send GitHub activity here automatically.",
+                "<h2>GitSnapBot</h2><p>This chat is connected. GitHub activity will be delivered here.</p>",
+                fallback="GitSnapBot is connected. GitHub activity will be delivered here.",
                 reply_markup=self._keyboard(),
             )
             self.store.set_meta("welcome_sent", "1")
@@ -495,3 +578,42 @@ class BotApp:
             next_digest=self._next_digest_label(),
         )
         await self.send(alert, chat_id=chat_id, with_nav=True)
+
+    async def _send_last(self, chat_id: int | str) -> None:
+        assert self.telegram is not None
+        alert = load_report(self.store)
+        if alert is None:
+            await self.telegram.send_message(
+                chat_id,
+                "<p>No scheduled report has been stored yet.</p>",
+                fallback="No scheduled report has been stored yet.",
+                reply_markup=self._keyboard(),
+            )
+            return
+        await self.send(alert, chat_id=chat_id, with_nav=True)
+
+    async def _handle_when(self, chat_id: int | str, args: str) -> None:
+        assert self.telegram is not None
+        try:
+            parsed = parse_schedule(args)
+        except ValueError as exc:
+            await self.telegram.send_message(
+                chat_id,
+                f"<p>{exc}</p>",
+                fallback=str(exc),
+                reply_markup=self._keyboard(),
+            )
+            return
+        if parsed:
+            apply_schedule(self.store, parsed)
+            log.info("Schedule updated  %s", parsed)
+        sched = load_schedule(self.store, self.config)
+        body = describe_schedule(sched)
+        nxt = self._next_digest_label()
+        html_body = body.replace("\n", "<br/>")
+        await self.telegram.send_message(
+            chat_id,
+            f"<h2>Schedule</h2><p>{html_body}</p><p>Next weekly report: {nxt}</p>",
+            fallback=f"{body}\nNext weekly report: {nxt}",
+            reply_markup=self._keyboard(),
+        )

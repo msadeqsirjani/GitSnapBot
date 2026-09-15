@@ -102,11 +102,12 @@ class Config:
     digest_send_empty: bool = True
     digest_top_repos: int = 5
     digest_pin: bool = True
+    digest_daily_brief: bool = False
     bot_short_description: str = "Weekly GitHub activity report for your profile."
     bot_description: str = (
-        "GitSnapBot watches your GitHub account and sends one weekly report: "
-        "follows, stars, forks, issues, pull requests, and more. "
-        "Tap Report to preview the queue anytime."
+        "GitSnapBot monitors your GitHub account and delivers one scheduled report: "
+        "follows, stars, forks, issues, pull requests, and related activity. "
+        "Send /digest to preview the current queue."
     )
     log_color: bool = True
     log_file: str | None = None
@@ -190,6 +191,7 @@ class Config:
             digest_send_empty=_env_bool("DIGEST_SEND_EMPTY", True),
             digest_top_repos=_env_int("DIGEST_TOP_REPOS", 5),
             digest_pin=_env_bool("DIGEST_PIN", True),
+            digest_daily_brief=_env_bool("DIGEST_DAILY_BRIEF", False),
             bot_short_description=_env(
                 "BOT_SHORT_DESCRIPTION",
                 "Weekly GitHub activity report for your profile.",
@@ -197,9 +199,9 @@ class Config:
             or "Weekly GitHub activity report for your profile.",
             bot_description=_env(
                 "BOT_DESCRIPTION",
-                "GitSnapBot watches your GitHub account and sends one weekly report: "
-                "follows, stars, forks, issues, pull requests, and more. "
-                "Tap Report to preview the queue anytime.",
+                "GitSnapBot monitors your GitHub account and delivers one scheduled report: "
+                "follows, stars, forks, issues, pull requests, and related activity. "
+                "Send /digest to preview the current queue.",
             )
             or "GitSnapBot watches your GitHub account and sends one weekly report.",
             log_color=_env_bool("LOG_COLOR", True),

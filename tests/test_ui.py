@@ -10,6 +10,7 @@ def test_reply_keyboard_swaps_pause_resume() -> None:
     labels_paused = {btn["text"] for row in paused["keyboard"] for btn in row}
     assert "⏸ Pause" in labels_running
     assert "📬 Report" in labels_running
+    assert "🗂 Last report" in labels_running
     assert "▶️ Resume" in labels_paused
     assert BUTTON_TO_COMMAND[BTN_STATUS] == "/status"
 
@@ -19,8 +20,8 @@ def test_activity_inline_has_profile_and_open() -> None:
     markup = activity_inline(alert)
     assert markup is not None
     buttons = markup["inline_keyboard"][0]
-    assert any(btn["text"].startswith("👤") for btn in buttons)
-    assert any(btn["text"].startswith("🔗") for btn in buttons)
+    assert any(btn["text"] == "View profile" for btn in buttons)
+    assert any(btn["text"] == "Open on GitHub" for btn in buttons)
 
 
 def test_status_inline_callback() -> None:

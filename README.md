@@ -91,12 +91,14 @@ Open the bot in Telegram and send `/start`. The process must stay running until 
 | --- | --- |
 | `/start` | Bind this chat and show the dashboard |
 | `/status` | Queue size, next report, API remaining |
-| `/digest` | Send the weekly report now |
+| `/digest` | Preview the current queue (does not clear it or change the pin) |
+| `/last` | Show the last scheduled report |
+| `/when` | Show or change the schedule (`/when monday 9:00`, `/when timezone Asia/Tehran`, `/when brief on`) |
 | `/pause` | Stop collecting |
 | `/resume` | Resume collecting |
 | `/help` | Short usage |
 
-The chat also has a persistent keyboard: **Status**, **Report**, **Pause** / **Resume**, **Help**.
+The chat also has a persistent keyboard: **Status**, **Report**, **Last report**, **Pause** / **Resume**, **Help**. Only the bound chat (first `/start`, or `TELEGRAM_CHAT_ID`) is accepted.
 
 ## Configuration
 
